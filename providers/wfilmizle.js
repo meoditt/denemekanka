@@ -1,14 +1,12 @@
 /**
- * WFilmizle - Nuvio Provider
+ * WFilmizle - Nuvio Provider (HDPlayerSystem Güncellemesiyle)
  * Kaynak: https://www.wfilmizle.bar
  * Yazar: ByAyzen (CS3) → Nuvio portlanması
- *
- * NOT: TMDB_API_KEY değişkenine kendi API anahtarını gir.
- * Ücretsiz al: https://www.themoviedb.org/settings/api
+ * * GÜNCELLEME: hdplayersystem.com API'sinden m3u8 token çözme eklendi.
  */
 
 var BASE_URL = "https://www.wfilmizle.bar";
-var TMDB_API_KEY = "314ea98913199aa268f4b0151b29994a"; // <-- Buraya kendi TMDB API key'ini yaz
+var TMDB_API_KEY = "314ea98913199aa268f4b0151b29994a"; // <-- TMDB API key'in burada duruyor
 
 var HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -35,7 +33,6 @@ function getTmdbTitle(tmdbId, mediaType) {
       return res.json();
     })
     .then(function (data) {
-      // Türkçe başlık → orijinal başlık sıralaması
       return (
         data.title ||
         data.name ||
@@ -58,8 +55,6 @@ function searchSite(title) {
       return res.text();
     })
     .then(function (html) {
-      // Arama sonuçlarındaki film linkleri genellikle bu pattern'e uyar:
-      // <a href="https://www.wfilmizle.bar/xyz-izle/">
       var patterns = [
         /href="(https?:\/\/(?:www\.)?wfilmizle\.bar\/[^"#?]+izle[^"#?]*\/)"/gi,
         /href="(https?:\/\/(?:www\.)?wfilmizle\.bar\/[^"#?]+-izle[^"#?]*\/)"/gi,
@@ -93,12 +88,10 @@ function extractFromPage(pageUrl) {
       var streams = [];
 
       // ── 1. iframe src ──────────────────────────────────────────────────
-      // WHDPlayer ve benzeri playerlar genellikle iframe ile gömülür
       var iframeRegex = /<iframe[^>]+src=["']([^"']+)["'][^>]*>/gi;
       var iMatch;
       while ((iMatch = iframeRegex.exec(html)) !== null) {
         var src = iMatch[1].trim();
-        // Google/Facebook/YouTube iframe'leri atla
         if (
           src.indexOf("google") === -1 &&
           src.indexOf("facebook") === -1 &&
@@ -131,61 +124,6 @@ function extractFromPage(pageUrl) {
         });
       }
 
-      // ── 3. JWPlayer / video.js file: ──────────────────────────────────
-      var jwRegex = /file\s*:\s*["']([^"']+)["']/gi;
-      var jMatch;
-      while ((jMatch = jwRegex.exec(html)) !== null) {
-        var fileUrl = jMatch[1];
-        if (
-          fileUrl.indexOf("m3u8") !== -1 ||
-          fileUrl.indexOf(".mp4") !== -1 ||
-          fileUrl.indexOf("stream") !== -1
-        ) {
-          console.log("[WFilmizle] JW file bulundu: " + fileUrl);
-          streams.push({
-            name: "WFilmizle",
-            title: "JWPlayer",
-            url: fileUrl,
-            quality: "HD",
-            headers: { Referer: BASE_URL }
-          });
-        }
-      }
-
-      // ── 4. videoUrl / source değişkeni ────────────────────────────────
-      var srcVarRegex = /(?:videoUrl|source|src|hlsUrl)\s*[=:]\s*["']([^"']+)["']/gi;
-      var sMatch;
-      while ((sMatch = srcVarRegex.exec(html)) !== null) {
-        var u = sMatch[1];
-        if (u.indexOf("http") === 0 && (u.indexOf("m3u8") !== -1 || u.indexOf(".mp4") !== -1)) {
-          console.log("[WFilmizle] video değişken bulundu: " + u);
-          streams.push({
-            name: "WFilmizle",
-            title: "Video",
-            url: u,
-            quality: "HD",
-            headers: { Referer: BASE_URL }
-          });
-        }
-      }
-
-      // ── 5. data-video / data-src ───────────────────────────────────────
-      var dataRegex = /data-(?:video|src|url)=["']([^"']+)["']/gi;
-      var dMatch;
-      while ((dMatch = dataRegex.exec(html)) !== null) {
-        var du = dMatch[1];
-        if (du.indexOf("http") === 0) {
-          console.log("[WFilmizle] data attr bulundu: " + du);
-          streams.push({
-            name: "WFilmizle",
-            title: "DataSrc",
-            url: du,
-            quality: "HD",
-            headers: { Referer: BASE_URL }
-          });
-        }
-      }
-
       // Aynı URL'leri tekrarlama
       var seen = {};
       var unique = streams.filter(function (s) {
@@ -194,16 +132,55 @@ function extractFromPage(pageUrl) {
         return true;
       });
 
-      console.log("[WFilmizle] Toplam " + unique.length + " stream bulundu.");
+      console.log("[WFilmizle] Toplam " + unique.length + " potansiyel stream kaynağı bulundu.");
       return unique;
     });
 }
 
 // ─────────────────────────────────────────────
-// İframe URL'sine gidip içinden stream çek
-// (iframe player kendi HTML'inde m3u8 tutuyorsa)
+// İframe URL'sine gidip içinden GİZLİ STREAM ÇEK
 // ─────────────────────────────────────────────
 function resolveIframeStream(iframeUrl, referer) {
+  // YENİ EKLENEN KISIM: hdplayersystem.com için özel API kazıma
+  if (iframeUrl.indexOf("hdplayersystem.com") !== -1) {
+    console.log("[WFilmizle] HDPlayer API'si çözümleniyor: " + iframeUrl);
+    
+    var urlParts = iframeUrl.split('/');
+    var videoId = urlParts[urlParts.length - 1]; 
+
+    if (!videoId) return Promise.resolve([]);
+
+    var apiUrl = "https://hdplayersystem.com/player/index.php?data=" + videoId + "&do=getVideo";
+    
+    return fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        "Referer": iframeUrl,
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": HEADERS["User-Agent"]
+      }
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(apiData) {
+      if (apiData && apiData.securedLink) {
+        console.log("[WFilmizle] HDPlayer şifreli m3u8 linki başarıyla alındı!");
+        return [{
+          name: "WFilmizle",
+          title: "HD (HLS)",
+          url: apiData.securedLink,
+          quality: "HD",
+          headers: { Referer: iframeUrl }
+        }];
+      }
+      return [];
+    })
+    .catch(function(err) {
+      console.log("[WFilmizle] HDPlayer API hatası: " + err.message);
+      return [];
+    });
+  }
+
+  // ESKİ KISIM: Diğer playerlar için (vidmoly, jwplayer vs.) fallback HTML araması
   return fetch(iframeUrl, {
     headers: {
       "User-Agent": HEADERS["User-Agent"],
@@ -215,34 +192,17 @@ function resolveIframeStream(iframeUrl, referer) {
     })
     .then(function (html) {
       var found = [];
-
       var m3u8Regex = /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi;
       var mMatch;
       while ((mMatch = m3u8Regex.exec(html)) !== null) {
         found.push({
           name: "WFilmizle",
-          title: "HD",
+          title: "Alternatif",
           url: mMatch[1],
           quality: "HD",
           headers: { Referer: iframeUrl }
         });
       }
-
-      var jwRegex = /file\s*:\s*["']([^"']+)["']/gi;
-      var jMatch;
-      while ((jMatch = jwRegex.exec(html)) !== null) {
-        var fileUrl = jMatch[1];
-        if (fileUrl.indexOf("m3u8") !== -1 || fileUrl.indexOf(".mp4") !== -1) {
-          found.push({
-            name: "WFilmizle",
-            title: "HD",
-            url: fileUrl,
-            quality: "HD",
-            headers: { Referer: iframeUrl }
-          });
-        }
-      }
-
       return found;
     })
     .catch(function (err) {
@@ -274,7 +234,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
     .then(function (filmUrl) {
       if (!filmUrl) return [];
       return extractFromPage(filmUrl).then(function (streams) {
-        // Eğer sadece iframe stream'leri bulduysa, iframe'leri de çöz
+        
         var iframeStreams = streams.filter(function (s) {
           return (
             s.url.indexOf(".m3u8") === -1 &&
@@ -283,8 +243,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
           );
         });
 
-        if (iframeStreams.length > 0 && streams.length === iframeStreams.length) {
-          // Tüm stream'ler iframe, içlerini çözmeye çalış
+        if (iframeStreams.length > 0) {
           var resolvePromises = iframeStreams.map(function (s) {
             return resolveIframeStream(s.url, filmUrl);
           });
@@ -294,8 +253,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
             results.forEach(function (r) {
               resolved = resolved.concat(r);
             });
-
-            // Çözümlenen varsa onları kullan, yoksa orijinal iframe stream'leri dön
             return resolved.length > 0 ? resolved : streams;
           });
         }
