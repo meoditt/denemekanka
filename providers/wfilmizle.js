@@ -1,5 +1,5 @@
 /**
- * WFilmizle - Nuvio Provider (404 REFERER FIX SÜRÜMÜ)
+ * WFilmizle - Nuvio Provider (TAM SÜRÜM + HATA TEŞHİSİ + 404 FIX)
  */
 
 var BASE_URL = "https://www.wfilmizle.bar";
@@ -12,6 +12,11 @@ var HEADERS = {
   "Referer": BASE_URL
 };
 
+// Hataları ekrana "sahte kaynak" olarak basmak için yardımcı fonksiyon
+function hataBas(mesaj) {
+  return [{ name: "BİLGİ/HATA", title: mesaj, url: "http://127.0.0.1/hata.mp4", quality: "SD" }];
+}
+
 function getTmdbTitle(tmdbId, mediaType) {
   var url = "https://api.themoviedb.org/3/" + mediaType + "/" + tmdbId + "?api_key=" + TMDB_API_KEY + "&language=tr-TR";
   return fetch(url)
@@ -19,12 +24,11 @@ function getTmdbTitle(tmdbId, mediaType) {
     .then(function (data) {
       return (data.title || data.name || data.original_title || data.original_name || null);
     })
-    .catch(function() { return null; });
+    .catch(function(e) { return null; });
 }
 
 function searchSite(title) {
   var searchUrl = BASE_URL + "/?s=" + encodeURIComponent(title);
-
   return fetch(searchUrl, { headers: HEADERS })
     .then(function (res) { return res.text(); })
     .then(function (html) {
@@ -49,26 +53,43 @@ function extractFromPage(pageUrl) {
     .then(function (res) { return res.text(); })
     .then(function (html) {
       var streams = [];
+      
+      // 1. İframeleri Topla
       var iframeRegex = /<iframe[^>]+src=["']([^"']+)["'][^>]*>/gi;
       var iMatch;
-      
       while ((iMatch = iframeRegex.exec(html)) !== null) {
         var src = iMatch[1].trim();
         if (src.indexOf("google") === -1 && src.indexOf("youtube") === -1 && src.length > 20) {
-          streams.push({ name: "WFilmizle", title: "API Çözümleniyor...", url: src });
+          streams.push({ type: "iframe", url: src });
         }
       }
+
+      // 2. Direkt m3u8 varsa Topla (Orijinal kodundaki gibi)
+      var m3u8Regex = /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi;
+      var mMatch;
+      while ((mMatch = m3u8Regex.exec(html)) !== null) {
+        streams.push({ type: "direct", url: mMatch[1] });
+      }
+
       return streams;
     })
     .catch(function(e) { return []; });
 }
 
-function resolveIframeStream(iframeUrl) {
+function resolveStream(sObj) {
+  // Eğer direkt m3u8 bulduysa API ile uğraşmadan hemen ver
+  if (sObj.type === "direct") {
+    return Promise.resolve([{ name: "WFilmizle", title: "Alternatif (Direkt m3u8)", url: sObj.url, quality: "HD" }]);
+  }
+
+  var iframeUrl = sObj.url;
+
+  // HDPlayer API Çözümleme ve 404 Nuvio Bypass
   if (iframeUrl.indexOf("hdplayersystem.com") !== -1) {
     var match = iframeUrl.match(/\/video\/([a-zA-Z0-9]+)/);
     var videoId = match ? match[1] : null;
 
-    if (!videoId) return Promise.resolve([]);
+    if (!videoId) return Promise.resolve(hataBas("HDPlayer ID Kesilemedi: " + iframeUrl));
 
     var apiUrl = "https://hdplayersystem.com/player/index.php?data=" + videoId + "&do=getVideo";
     
@@ -85,47 +106,49 @@ function resolveIframeStream(iframeUrl) {
       try {
         var apiData = JSON.parse(text);
         if (apiData && apiData.securedLink) {
-          
-          // İŞTE ÇÖZÜM BURADA: Nuvio oynatıcısının 404 vermemesi için linkin sonuna | ile sahte kimlik ekliyoruz
+          // NUVIO 404 BYPASS TRICK BURADA:
           var cloudstreamFormattedUrl = apiData.securedLink + "|Referer=https://hdplayersystem.com/&Origin=https://hdplayersystem.com/&User-Agent=" + encodeURIComponent(HEADERS["User-Agent"]);
-
+          
           return [{
             name: "WFilmizle",
-            title: "HD (HLS Oynat)",
+            title: "HDPlayer (HLS Oynat)",
             url: cloudstreamFormattedUrl, 
             quality: "HD"
-            // headers objesini kaldırdık çünkü URL içine gömdük
           }];
         }
+        return hataBas("HDPlayer JSON içinde link bulunamadı!");
       } catch(e) {
-        console.log("JSON Parçalama hatası");
+        return hataBas("HDPlayer API Engeli (JSON Bozuk): " + text.substring(0, 25));
       }
-      return [];
     })
     .catch(function(err) {
-      return [];
+      return hataBas("HDPlayer API'ye ulaşılamadı.");
     });
   }
 
-  return Promise.resolve([]);
+  // Başka bir player iframe'i ise direkt linkini ver
+  return Promise.resolve([{ name: "WFilmizle", title: "Diğer İframe (Oynatmayabilir)", url: iframeUrl, quality: "SD" }]);
 }
 
 function getStreams(tmdbId, mediaType, season, episode) {
-  if (!TMDB_API_KEY) return Promise.resolve([]);
+  if (!TMDB_API_KEY) return Promise.resolve(hataBas("HATA: TMDB Key Eksik!"));
 
   return getTmdbTitle(tmdbId, mediaType)
     .then(function (title) {
-      if (!title) return [];
+      if (!title) return hataBas("HATA: TMDB'den ("+tmdbId+") isim çekilemedi!");
+      
       return searchSite(title).then(function(filmUrl) {
          return { title: title, url: filmUrl };
       });
     })
     .then(function (data) {
-      if (!data.url) return [];
+      if (!data.url) return hataBas("HATA: '" + data.title + "' Wfilmizle sitesinde bulunamadı!");
       
-      return extractFromPage(data.url).then(function (streams) {
-        var resolvePromises = streams.map(function (s) {
-          return resolveIframeStream(s.url);
+      return extractFromPage(data.url).then(function (rawStreams) {
+        if (rawStreams.length === 0) return hataBas("HATA: '" + data.title + "' sayfasında video/iframe bulunamadı!");
+
+        var resolvePromises = rawStreams.map(function (s) {
+          return resolveStream(s);
         });
 
         return Promise.all(resolvePromises).then(function (results) {
@@ -135,7 +158,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
         });
       });
     })
-    .catch(function (err) { return []; });
+    .catch(function (err) { return hataBas("SİSTEM ÇÖKTÜ: " + err.message); });
 }
 
 if (typeof module !== "undefined" && module.exports) {
