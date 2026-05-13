@@ -1,16 +1,19 @@
 {
+  "name": "WFilmizle-Nuvio",
+  "version": "1.0",
   "scrapers": [
     {
       "id": "wfilmizle",
-      "version": "1",
       "name": "WFilmizle",
-      "description": "Türkçe dublaj ve altyazılı filmler",
-      "filename": "providers/wfilmizle.js",
-      "enabled": true,
+      "description": "Türkçe dublaj ve altyazılı filmler. wfilmizle.bar üzerinden stream sağlar.",
+      "version": "1.0.0",
       "author": "ByAyzen",
       "supportedTypes": ["movie"],
-      "contentLanguage": ["tr"],
-      "logo": "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://wfilmizle.bar&size=128"
+      "filename": "providers/wfilmizle.js",
+      "enabled": true,
+      "formats": ["mp4", "mkv", "hls", "m3u8"],
+      "logo": "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://wfilmizle.bar&size=128",
+      "contentLanguage": ["tr"]
     }
   ]
 }
